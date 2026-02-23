@@ -1,0 +1,65 @@
+{
+  "title": "Анализ блокировок",
+  "uid": "locks-trend-v1",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Время блокировок (LockTime)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 8},
+      "targets": [
+        {
+          "datasource": "ClickHouse",
+          "query": "SELECT toDateTime(event_date) as time, avg(lock_time) as avg_lock_time FROM techlog WHERE event_date >= NOW() - interval 30 day GROUP BY time ORDER BY time",
+          "refId": "A",
+          "legendFormat": "Среднее время блокировки"
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "table"}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Тренд (30 дней)",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "datasource": "ClickHouse",
+          "query": "SELECT toDate(event_date) as time, avg(lock_time) as lock_time, avg(avg(lock_time)) OVER (ORDER BY toDate(event_date) ROWS BETWEEN 6 PRECEDING AND CURRENT ROW) as trend_7d FROM techlog GROUP BY toDate(event_date) ORDER BY time",
+          "refId": "A",
+          "legendFormat": "lock_time"
+        },
+        {
+          "datasource": "ClickHouse",
+          "refId": "B",
+          "legendFormat": "тренд 7 дней"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Топ-10 блокировок по таблицам",
+      "type": "table",
+      "gridPos": {"x": 12, "y": 8, "w": 12, "h": 8},
+      "targets": [
+        {
+          "datasource": "ClickHouse",
+          "query": "SELECT table_name, count(*) as lock_count, avg(lock_time) as avg_lock_time, max(lock_time) as max_lock_time FROM techlog WHERE event_date >= NOW() - interval 7 day GROUP BY table_name ORDER BY lock_count DESC LIMIT 10",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "displayMode": "auto"
+          }
+        }
+      }
+    }
+  ]
+}
