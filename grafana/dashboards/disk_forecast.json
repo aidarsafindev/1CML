@@ -1,0 +1,145 @@
+{
+  "title": "Прогноз заполнения диска",
+  "uid": "disk-forecast-v1",
+  "version": 1,
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Диск D: (база 1С) - факт и прогноз",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 12},
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 180},
+              {"color": "red", "value": 200}
+            ]
+          }
+        }
+      },
+      "targets": [
+        {
+          "datasource": "PostgreSQL",
+          "format": "time_series",
+          "rawSql": "SELECT metric_date as time, disk_used_gb as value FROM disk_forecast WHERE $__timeFilter(metric_date) ORDER BY time",
+          "refId": "A",
+          "legendFormat": "Факт"
+        },
+        {
+          "datasource": "PostgreSQL",
+          "format": "time_series",
+          "rawSql": "SELECT metric_date + interval '7 days' as time, forecast_7d_gb as value FROM disk_forecast WHERE forecast_7d_gb IS NOT NULL AND metric_date >= NOW() - interval '30 days' ORDER BY time",
+          "refId": "B",
+          "legendFormat": "Прогноз +7 дней"
+        },
+        {
+          "datasource": "PostgreSQL",
+          "format": "time_series",
+          "rawSql": "SELECT metric_date + interval '14 days' as time, forecast_14d_gb as value FROM disk_forecast WHERE forecast_14d_gb IS NOT NULL AND metric_date >= NOW() - interval '30 days' ORDER BY time",
+          "refId": "C",
+          "legendFormat": "Прогноз +14 дней"
+        },
+        {
+          "datasource": "PostgreSQL",
+          "format": "time_series",
+          "rawSql": "SELECT metric_date as time, 200 as value FROM disk_forecast WHERE $__timeFilter(metric_date)",
+          "refId": "D",
+          "legendFormat": "Критический порог (200 ГБ)"
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "table", "placement": "bottom"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Скорость роста",
+      "type": "stat",
+      "gridPos": {"x": 0, "y": 12, "w": 8, "h": 4},
+      "targets": [
+        {
+          "datasource": "PostgreSQL",
+          "rawSql": "SELECT (MAX(disk_used_gb) - MIN(disk_used_gb)) / EXTRACT(day FROM (MAX(metric_date) - MIN(metric_date))) as growth_rate FROM disk_forecast WHERE metric_date >= NOW() - interval '30 days'",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bps",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 3},
+              {"color": "red", "value": 5}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Дней до заполнения",
+      "type": "stat",
+      "gridPos": {"x": 8, "y": 12, "w": 8, "h": 4},
+      "targets": [
+        {
+          "datasource": "PostgreSQL",
+          "rawSql": "WITH last AS (SELECT disk_used_gb FROM disk_forecast ORDER BY metric_date DESC LIMIT 1), rate AS (SELECT (MAX(disk_used_gb) - MIN(disk_used_gb)) / EXTRACT(day FROM (MAX(metric_date) - MIN(metric_date))) as growth_rate FROM disk_forecast WHERE metric_date >= NOW() - interval '30 days') SELECT (200 - (SELECT disk_used_gb FROM last)) / (SELECT growth_rate FROM rate) as days_to_full",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "d",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 14},
+              {"color": "red", "value": 7}
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Качество модели (MAE)",
+      "type": "stat",
+      "gridPos": {"x": 16, "y": 12, "w": 8, "h": 4},
+      "targets": [
+        {
+          "datasource": "PostgreSQL",
+          "rawSql": "SELECT model_mae FROM model_quality ORDER BY train_date DESC LIMIT 1",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "red", "value": 10}
+            ]
+          }
+        }
+      }
+    }
+  ]
+}
