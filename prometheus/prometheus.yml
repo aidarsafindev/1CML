@@ -1,0 +1,44 @@
+### `prometheus.yml`
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['localhost:9093']
+
+rule_files:
+  - 'alerts.yml'
+
+scrape_configs:
+  # Мониторинг самого Prometheus
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Windows экспортер (метрики ОС)
+  - job_name: 'windows'
+    static_configs:
+      - targets: ['localhost:9182']
+    metrics_path: /metrics
+
+  # PostgreSQL экспортер
+  - job_name: 'postgresql'
+    static_configs:
+      - targets: ['localhost:9187']
+    metrics_path: /metrics
+
+  # ClickHouse экспортер (опционально)
+  - job_name: 'clickhouse'
+    static_configs:
+      - targets: ['localhost:9363']
+    metrics_path: /metrics
+
+  # Кастомные метрики из Python-скриптов
+  - job_name: 'custom_metrics'
+    static_configs:
+      - targets: ['localhost:8000']
+    metrics_path: /metrics
+    scrape_interval: 1h  # раз в час, т.к. прогнозы обновляются редко
