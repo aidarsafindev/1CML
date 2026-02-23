@@ -1,0 +1,64 @@
+{
+  "title": "Контрольные карты аномалий",
+  "uid": "anomalies-v1",
+  "version": 1,
+  "panels": [
+    {
+      "id": 1,
+      "title": "Активные сессии - контрольная карта",
+      "type": "timeseries",
+      "gridPos": {"x": 0, "y": 0, "w": 24, "h": 10},
+      "targets": [
+        {
+          "datasource": "Prometheus",
+          "expr": "active_sessions{instance='1c-server'}",
+          "refId": "A",
+          "legendFormat": "Факт"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "avg_over_time(active_sessions{instance='1c-server'}[7d]) + 3 * stddev_over_time(active_sessions{instance='1c-server'}[7d])",
+          "refId": "B",
+          "legendFormat": "Верхняя граница (+3σ)"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "avg_over_time(active_sessions{instance='1c-server'}[7d]) - 3 * stddev_over_time(active_sessions{instance='1c-server'}[7d])",
+          "refId": "C",
+          "legendFormat": "Нижняя граница (-3σ)"
+        },
+        {
+          "datasource": "Prometheus",
+          "expr": "avg_over_time(active_sessions{instance='1c-server'}[7d])",
+          "refId": "D",
+          "legendFormat": "Среднее (7 дней)"
+        }
+      ],
+      "options": {
+        "legend": {"displayMode": "table"},
+        "tooltip": {"mode": "multi"}
+      }
+    },
+    {
+      "id": 2,
+      "title": "Обнаруженные аномалии",
+      "type": "table",
+      "gridPos": {"x": 0, "y": 10, "w": 24, "h": 6},
+      "targets": [
+        {
+          "datasource": "PostgreSQL",
+          "rawSql": "SELECT detected_at, metric_name, actual_value, expected_value, deviation_sigma FROM anomalies WHERE detected_at >= NOW() - interval '7 days' ORDER BY detected_at DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left"
+          }
+        }
+      }
+    }
+  ]
+}
