@@ -1,0 +1,71 @@
+groups:
+  - name: disk_predictions
+    interval: 1h
+    rules:
+      - alert: DiskWillFillIn7Days
+        expr: |
+          (
+            forecast_disk_usage_7d{instance=~".*"}
+            -
+            disk_limit_gb{instance=~".*"}
+          ) > 0
+        for: 1h
+        labels:
+          severity: warning
+          type: predictive
+        annotations:
+          summary: "Диск {{ $labels.instance }} заполнится через 7 дней"
+          description: "Прогноз: {{ $value | humanize }} ГБ при лимите {{ $labels.disk_limit }} ГБ"
+          action: "Расширить том или почистить архив"
+
+      - alert: DiskWillFillIn14Days
+        expr: |
+          (
+            forecast_disk_usage_14d{instance=~".*"}
+            -
+            disk_limit_gb{instance=~".*"}
+          ) > 0
+        for: 2h
+        labels:
+          severity: info
+          type: predictive
+        annotations:
+          summary: "Диск {{ $labels.instance }} заполнится через 14 дней"
+          description: "Прогноз: {{ $value | humanize }} ГБ при лимите {{ $labels.disk_limit }} ГБ"
+          action: "Запланировать расширение диска"
+
+  - name: lock_trends
+    interval: 15m
+    rules:
+      - alert: LockTimeIncreasingRapidly
+        expr: |
+          rate(lock_time_seconds_total[1h])
+          /
+          rate(lock_time_seconds_total[24h])
+          > 1.5
+        for: 30m
+        labels:
+          severity: warning
+          type: trend
+        annotations:
+          summary: "Рост времени блокировок на 50% за час"
+          description: "Текущий темп: {{ $value }}x от среднего. Возможен риск дедлока."
+
+  - name: anomalies
+    interval: 5m
+    rules:
+      - alert: UserSessionsAnomaly
+        expr: |
+          abs(
+            active_sessions
+            -
+            avg_over_time(active_sessions[7d])
+          ) / stddev_over_time(active_sessions[7d])
+          > 3
+        for: 10m
+        labels:
+          severity: warning
+          type: anomaly
+        annotations:
+          summary: "Аномалия в количестве сессий"
+          description: "Отклонение от нормы в 3 сигма. Возможно, проблемы с доступом."
