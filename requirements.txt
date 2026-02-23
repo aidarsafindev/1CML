@@ -1,0 +1,20 @@
+# Core data science
+pandas==2.0.3
+numpy==1.24.3
+scikit-learn==1.3.0
+scipy==1.10.1
+prophet==1.1.5
+
+# Databases
+psycopg2-binary==2.9.7
+clickhouse-driver==0.2.6
+sqlalchemy==2.0.19
+
+# Monitoring & APIs
+requests==2.31.0
+prometheus-api-client==0.5.3
+
+# Utils
+python-dotenv==1.0.0
+schedule==1.2.0
+loguru==0.7.2
