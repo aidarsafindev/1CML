@@ -1,0 +1,40 @@
+global:
+  resolve_timeout: 5m
+  slack_api_url: ''  # опционально
+
+route:
+  group_by: ['alertname', 'instance']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 24h
+  receiver: 'webhook'
+  
+  routes:
+  - match:
+      severity: critical
+    receiver: webhook
+    continue: true
+  - match:
+      severity: warning
+    receiver: webhook
+    continue: true
+
+receivers:
+- name: 'webhook'
+  webhook_configs:
+  - url: 'http://webhook-handler:5000/webhook'
+    send_resolved: true
+    http_config:
+      timeout: 10s
+
+- name: 'telegram'
+  webhook_configs:
+  - url: 'http://webhook-handler:5000/telegram'
+    send_resolved: true
+
+inhibit_rules:
+  - source_match:
+      severity: 'critical'
+    target_match:
+      severity: 'warning'
+    equal: ['alertname', 'instance']
