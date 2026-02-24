@@ -1,5 +1,3 @@
-## Полный README.md с учетом ITSM-модуля
-
 ```markdown
 # 1CML — Machine Learning для 1С
 
