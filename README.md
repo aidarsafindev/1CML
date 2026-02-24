@@ -1,13 +1,6 @@
 ```markdown
 # 1CML — Machine Learning для 1С
 
-[![GitHub stars](https://img.shields.io/github/stars/aidarsafindev/1CML)](https://github.com/aidarsafindev/1CML/stargazers)
-[![GitHub license](https://img.shields.io/github/license/aidarsafindev/1CML)](https://github.com/aidarsafindev/1CML/blob/main/LICENSE)
-[![Python](https://img.shields.io/badge/python-3.8%2B-blue)](https://www.python.org/)
-[![Grafana](https://img.shields.io/badge/grafana-10.2%2B-orange)](https://grafana.com)
-[![Prometheus](https://img.shields.io/badge/prometheus-2.45%2B-red)](https://prometheus.io)
-[![ClickHouse](https://img.shields.io/badge/clickhouse-23.8%2B-yellow)](https://clickhouse.com)
-
 **Превентивная аналитика и прогнозирование сбоев в 1С с помощью Open Source инструментов.**
 
 Этот репозиторий содержит готовое решение для прогнозирования
