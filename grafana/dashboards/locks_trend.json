@@ -1,0 +1,29 @@
+{
+  "title": "1CML - Анализ блокировок и риск дедлоков",
+  "panels": [
+    {
+      "title": "Дедлоки по дням",
+      "type": "timeseries",
+      "targets": [{
+        "datasource": "ClickHouse",
+        "query": "SELECT event_date, countIf(event_type='DEADLOCK') FROM lock_events WHERE $__timeFilter(event_date) GROUP BY event_date ORDER BY event_date"
+      }]
+    },
+    {
+      "title": "Среднее время ожидания блокировок",
+      "type": "timeseries",
+      "targets": [{
+        "datasource": "ClickHouse",
+        "query": "SELECT event_date, avg(lock_wait_time)/1000 FROM lock_events WHERE $__timeFilter(event_date) GROUP BY event_date ORDER BY event_date"
+      }]
+    },
+    {
+      "title": "Топ-10 таблиц по блокировкам",
+      "type": "table",
+      "targets": [{
+        "datasource": "ClickHouse",
+        "query": "SELECT table_name, count() as locks, countIf(event_type='DEADLOCK') as deadlocks, avg(lock_wait_time)/1000 as avg_wait_ms FROM lock_events WHERE event_date = today() GROUP BY table_name ORDER BY locks DESC LIMIT 10"
+      }]
+    }
+  ]
+}
