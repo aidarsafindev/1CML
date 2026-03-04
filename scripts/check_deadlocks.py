@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Скрипт для проверки риска дедлоков на основе анализа техжурнала из ClickHouse
+Скрипт для проверки риска дедлоков и оповещения
 Запуск: каждый час
 """
 
@@ -14,6 +14,11 @@ import pandas as pd
 import numpy as np
 from clickhouse_driver import Client
 import requests
+import json
+from pathlib import Path
+
+# Добавляем пути
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,6 +43,12 @@ class DeadlockDetector:
         self.clickhouse_port = int(os.getenv('CLICKHOUSE_PORT', 9000))
         self.clickhouse_db = os.getenv('CLICKHOUSE_DB', 'techlog')
         
+        # Пороги для алертов
+        self.DEADLOCK_THRESHOLD = 1  # 1 дедлок в час - уже критично
+        self.WAIT_TIME_THRESHOLD = 500000  # 500 мс - внимание
+        self.WAIT_TIME_CRITICAL = 1000000  # 1 секунда - критично
+        self.TREND_THRESHOLD = 50  # рост на 50% за неделю
+        
         try:
             self.client = Client(
                 host=self.clickhouse_host,
@@ -49,226 +60,281 @@ class DeadlockDetector:
             logger.error(f"Ошибка подключения к ClickHouse: {e}")
             sys.exit(1)
     
-    def get_lock_stats(self, days=7):
+    def get_last_hour_locks(self):
         """
-        Получение статистики по блокировкам за последние N дней
-        
-        Args:
-            days: количество дней для анализа
-            
-        Returns:
-            DataFrame с колонками: date, avg_lock_time, max_lock_time, 
-            long_locks_count, deadlock_count
+        Получение статистики по блокировкам за последний час
         """
-        query = f"""
+        query = """
         SELECT 
-            toDate(event_date) as date,
-            avg(lock_time) as avg_lock_time,
-            max(lock_time) as max_lock_time,
-            countIf(lock_time > 1000000) as long_locks_count,
-            countIf(position(lower(raw_line), 'deadlock') > 0) as deadlock_count,
-            countIf(position(lower(raw_line), 'lock') > 0) as lock_events
-        FROM techlog
-        WHERE event_date >= today() - {days}
-          AND lock_time > 0
-        GROUP BY date
-        ORDER BY date DESC
+            count() as total_locks,
+            countIf(event_type = 'DEADLOCK') as deadlocks,
+            countIf(event_type = 'TTIMEOUT') as timeouts,
+            avg(lock_wait_time) as avg_wait_time,
+            max(lock_wait_time) as max_wait_time,
+            uniq(table_name) as tables_involved,
+            uniq(session_id) as sessions_involved
+        FROM lock_events
+        WHERE event_datetime >= now() - interval 1 hour
         """
         
-        try:
-            result = self.client.execute(query)
-            df = pd.DataFrame(result, columns=[
-                'date', 'avg_lock_time', 'max_lock_time', 
-                'long_locks_count', 'deadlock_count', 'lock_events'
-            ])
-            logger.info(f"Получены данные за {len(df)} дней")
-            return df
-        except Exception as e:
-            logger.error(f"Ошибка запроса к ClickHouse: {e}")
-            return pd.DataFrame()
+        result = self.client.execute(query)
+        if result and result[0]:
+            stats = {
+                'total_locks': result[0][0],
+                'deadlocks': result[0][1],
+                'timeouts': result[0][2],
+                'avg_wait_ms': result[0][3] / 1000 if result[0][3] else 0,
+                'max_wait_ms': result[0][4] / 1000 if result[0][4] else 0,
+                'tables_involved': result[0][5],
+                'sessions_involved': result[0][6]
+            }
+            return stats
+        return None
     
-    def get_top_tables(self, days=1):
+    def get_weekly_trend(self):
         """
-        Получение топ-10 таблиц по блокировкам за последний день
+        Получение тренда за последние 7 дней
+        """
+        query = """
+        SELECT 
+            toDate(event_datetime) as date,
+            avg(lock_wait_time) as avg_wait,
+            countIf(event_type = 'DEADLOCK') as deadlocks
+        FROM lock_events
+        WHERE event_datetime >= now() - interval 7 day
+        GROUP BY date
+        ORDER BY date
+        """
         
-        Returns:
-            DataFrame с колонками: table, lock_count, avg_lock_time
+        result = self.client.execute(query)
+        if len(result) < 2:
+            return None
+        
+        # Считаем среднее за первую половину и вторую половину
+        mid = len(result) // 2
+        first_half = [r[1] for r in result[:mid]]
+        second_half = [r[1] for r in result[mid:]]
+        
+        if first_half and second_half:
+            avg_first = sum(first_half) / len(first_half)
+            avg_second = sum(second_half) / len(second_half)
+            
+            if avg_first > 0:
+                trend_pct = ((avg_second - avg_first) / avg_first) * 100
+            else:
+                trend_pct = 0
+            
+            return {
+                'trend_pct': trend_pct,
+                'avg_first_ms': avg_first / 1000,
+                'avg_second_ms': avg_second / 1000
+            }
+        return None
+    
+    def get_top_tables_last_hour(self, limit=10):
+        """
+        Получение топ таблиц по блокировкам за последний час
         """
         query = f"""
         SELECT 
-            extract(raw_line, 'table=\'([^\']*)\'') as table_name,
+            table_name,
             count() as lock_count,
-            avg(lock_time) as avg_lock_time,
-            max(lock_time) as max_lock_time
-        FROM techlog
-        WHERE event_date = today()
-          AND lock_time > 0
+            countIf(event_type = 'DEADLOCK') as deadlocks,
+            avg(lock_wait_time) as avg_wait
+        FROM lock_events
+        WHERE event_datetime >= now() - interval 1 hour
           AND table_name != ''
         GROUP BY table_name
         ORDER BY lock_count DESC
-        LIMIT 10
+        LIMIT {limit}
         """
         
-        try:
-            result = self.client.execute(query)
-            df = pd.DataFrame(result, columns=[
-                'table_name', 'lock_count', 'avg_lock_time', 'max_lock_time'
-            ])
-            return df
-        except Exception as e:
-            logger.error(f"Ошибка запроса топ-таблиц: {e}")
-            return pd.DataFrame()
+        result = self.client.execute(query)
+        tables = []
+        for row in result:
+            tables.append({
+                'table': row[0],
+                'lock_count': row[1],
+                'deadlocks': row[2],
+                'avg_wait_ms': row[3] / 1000 if row[3] else 0
+            })
+        return tables
     
-    def calculate_trend(self, df):
+    def analyze_risk(self):
         """
-        Расчет тренда роста блокировок
+        Анализ риска дедлоков на основе всех метрик
         
-        Args:
-            df: DataFrame со статистикой по дням
-            
         Returns:
-            dict: метрики тренда
+            dict: результаты анализа
         """
-        if len(df) < 3:
-            return {
-                'trend_percent': 0,
-                'risk_level': 'unknown',
-                'message': 'Недостаточно данных'
-            }
-        
-        # Сортируем по дате (от старых к новым)
-        df_sorted = df.sort_values('date')
-        
-        # Берем первую половину (базовый уровень) и вторую половину (текущий)
-        mid = len(df_sorted) // 2
-        base_avg = df_sorted.iloc[:mid]['avg_lock_time'].mean()
-        current_avg = df_sorted.iloc[mid:]['avg_lock_time'].mean()
-        
-        if base_avg == 0:
-            trend_percent = 0
-        else:
-            trend_percent = ((current_avg - base_avg) / base_avg) * 100
-        
-        # Определяем уровень риска
-        if df_sorted['deadlock_count'].iloc[-1] > 0:
-            risk_level = 'critical'
-            message = f"⚠️ Обнаружены deadlock'и за последний день!"
-        elif trend_percent > 100:
-            risk_level = 'critical'
-            message = f"🚨 Рост блокировок > 100% за период!"
-        elif trend_percent > 50:
-            risk_level = 'high'
-            message = f"⚠️ Рост блокировок > 50% за период"
-        elif trend_percent > 30:
-            risk_level = 'warning'
-            message = f"⚡ Рост блокировок > 30% за период"
-        elif trend_percent > 10:
-            risk_level = 'info'
-            message = f"📈 Небольшой рост блокировок"
-        else:
-            risk_level = 'normal'
-            message = f"✅ Блокировки в норме"
-        
-        # Добавляем информацию о долгих блокировках
-        long_locks_today = df_sorted.iloc[-1]['long_locks_count'] if len(df_sorted) > 0 else 0
-        if long_locks_today > 10:
-            message += f" Долгих блокировок сегодня: {long_locks_today}"
-        
-        return {
-            'trend_percent': round(trend_percent, 1),
-            'base_avg': round(base_avg, 0),
-            'current_avg': round(current_avg, 0),
-            'risk_level': risk_level,
-            'message': message,
-            'deadlocks_today': int(df_sorted.iloc[-1]['deadlock_count']) if len(df_sorted) > 0 else 0,
-            'long_locks_today': int(long_locks_today)
+        risk = {
+            'timestamp': datetime.now().isoformat(),
+            'level': 'normal',
+            'score': 0,
+            'warnings': [],
+            'metrics': {},
+            'tables': []
         }
+        
+        # 1. Статистика за последний час
+        last_hour = self.get_last_hour_locks()
+        if last_hour:
+            risk['metrics']['last_hour'] = last_hour
+            
+            # Проверка на дедлоки
+            if last_hour['deadlocks'] >= self.DEADLOCK_THRESHOLD:
+                risk['score'] += 50
+                risk['warnings'].append({
+                    'level': 'critical',
+                    'message': f"Обнаружены deadlock'и: {last_hour['deadlocks']} за последний час!"
+                })
+            
+            # Проверка времени ожидания
+            if last_hour['max_wait_ms'] > self.WAIT_TIME_CRITICAL / 1000:
+                risk['score'] += 30
+                risk['warnings'].append({
+                    'level': 'critical',
+                    'message': f"Критическое время ожидания блокировки: {last_hour['max_wait_ms']:.0f} мс"
+                })
+            elif last_hour['avg_wait_ms'] > self.WAIT_TIME_THRESHOLD / 1000:
+                risk['score'] += 15
+                risk['warnings'].append({
+                    'level': 'warning',
+                    'message': f"Высокое среднее время ожидания: {last_hour['avg_wait_ms']:.0f} мс"
+                })
+        
+        # 2. Тренд за неделю
+        trend = self.get_weekly_trend()
+        if trend:
+            risk['metrics']['trend'] = trend
+            
+            if trend['trend_pct'] > 100:
+                risk['score'] += 40
+                risk['warnings'].append({
+                    'level': 'critical',
+                    'message': f"Рост времени ожидания на {trend['trend_pct']:.0f}% за неделю!"
+                })
+            elif trend['trend_pct'] > 50:
+                risk['score'] += 20
+                risk['warnings'].append({
+                    'level': 'warning',
+                    'message': f"Рост времени ожидания на {trend['trend_pct']:.0f}% за неделю"
+                })
+        
+        # 3. Топ таблиц за последний час
+        risk['tables'] = self.get_top_tables_last_hour(10)
+        
+        # Определение уровня риска
+        if risk['score'] >= 70:
+            risk['level'] = 'critical'
+        elif risk['score'] >= 40:
+            risk['level'] = 'high'
+        elif risk['score'] >= 20:
+            risk['level'] = 'warning'
+        
+        return risk
     
-    def send_telegram_alert(self, message, risk_level):
+    def send_telegram_alert(self, risk):
         """Отправка алерта в Telegram"""
         telegram_token = os.getenv('TELEGRAM_TOKEN')
         chat_id = os.getenv('TELEGRAM_CHAT_ID')
         
         if not telegram_token or not chat_id:
-            logger.warning("Telegram не настроен, пропускаем отправку")
+            logger.warning("Telegram не настроен")
             return
         
-        # Эмодзи в зависимости от уровня риска
+        # Эмодзи для разных уровней
         emoji = {
             'critical': '🚨',
             'high': '⚠️',
             'warning': '⚡',
-            'info': '📊',
-            'normal': '✅',
-            'unknown': '❓'
-        }.get(risk_level, '📢')
+            'normal': '✅'
+        }.get(risk['level'], '📢')
         
-        full_message = f"{emoji} **Анализ блокировок**\n\n{message}\n\n🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+        # Формируем сообщение
+        message = f"{emoji} **АНАЛИЗ БЛОКИРОВОК 1С**\n\n"
+        message += f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
+        message += f"📊 Уровень риска: **{risk['level'].upper()}** (оценка: {risk['score']})\n\n"
+        
+        if risk['warnings']:
+            message += "**⚠️ Предупреждения:**\n"
+            for w in risk['warnings']:
+                message += f"• {w['message']}\n"
+            message += "\n"
+        
+        if risk['metrics'].get('last_hour'):
+            m = risk['metrics']['last_hour']
+            message += "**📈 За последний час:**\n"
+            message += f"• Блокировок: {m['total_locks']}\n"
+            message += f"• Дедлоков: {m['deadlocks']}\n"
+            message += f"• Таймаутов: {m['timeouts']}\n"
+            message += f"• Среднее ожидание: {m['avg_wait_ms']:.0f} мс\n"
+            message += f"• Макс. ожидание: {m['max_wait_ms']:.0f} мс\n"
+            message += "\n"
+        
+        if risk['tables']:
+            message += "**📋 Топ таблиц по блокировкам:**\n"
+            for t in risk['tables'][:5]:
+                deadlock_mark = "🔴" if t['deadlocks'] > 0 else "⚪"
+                message += f"{deadlock_mark} {t['table']}: {t['lock_count']} блокировок"
+                if t['avg_wait_ms'] > 100:
+                    message += f" ⏱️ {t['avg_wait_ms']:.0f} мс"
+                message += "\n"
         
         try:
             url = f"https://api.telegram.org/bot{telegram_token}/sendMessage"
-            requests.post(url, json={
+            response = requests.post(url, json={
                 'chat_id': chat_id,
-                'text': full_message,
+                'text': message,
                 'parse_mode': 'Markdown'
             })
-            logger.info("Алерт отправлен в Telegram")
+            if response.status_code == 200:
+                logger.info("Алерт отправлен в Telegram")
+            else:
+                logger.error(f"Ошибка Telegram: {response.text}")
         except Exception as e:
             logger.error(f"Ошибка отправки в Telegram: {e}")
     
-    def create_jira_ticket(self, trend_data, top_tables):
+    def create_jira_ticket(self, risk):
         """Создание задачи в Jira при высоком риске"""
         try:
-            # Добавляем путь к ITSM модулю
-            sys.path.append(os.path.join(os.path.dirname(__file__), 'itsm'))
-            from jira_integration import JiraClient
+            from scripts.itsm.jira_integration import JiraClient
             
             jira = JiraClient()
             
-            # Формируем заголовок
-            if trend_data['deadlocks_today'] > 0:
-                summary = f"[КРИТИЧНО] Обнаружены deadlock'и в базе 1С"
-            else:
-                summary = f"[Превентивно] Рост блокировок {trend_data['trend_percent']}% за неделю"
-            
-            # Формируем описание
-            description = f"""
-*Автоматически создано системой анализа блокировок 1CML*
-
-**Проблема:** {trend_data['message']}
-
-**Метрики за неделю:**
-- Среднее время блокировки (текущее): {trend_data['current_avg']} мкс
-- Среднее время блокировки (базовое): {trend_data['base_avg']} мкс
-- Рост: {trend_data['trend_percent']}%
-- Deadlock'и сегодня: {trend_data['deadlocks_today']}
-- Долгих блокировок (>1с): {trend_data['long_locks_today']}
-
-**Топ-5 таблиц по блокировкам сегодня:**
-"""
-            for _, row in top_tables.head(5).iterrows():
-                description += f"- {row['table_name']}: {row['lock_count']} блокировок, среднее {row['avg_lock_time']} мкс\n"
-            
-            description += f"""
-**Рекомендации:**
-1. Проверить запросы к таблицам выше
-2. Оптимизировать индексы
-3. Проанализировать длительные транзакции
-
-**Ссылки:**
-- Дашборд: http://grafana:3000/d/locks-trend
-- Лог: /var/log/1cml/deadlocks.log
-
-*Создано: {datetime.now().strftime('%Y-%m-%d %H:%M')}*
-"""
-            
             # Определяем приоритет
-            if trend_data['risk_level'] == 'critical':
+            if risk['level'] == 'critical':
                 priority = "Highest"
-            elif trend_data['risk_level'] == 'high':
+                summary = f"[КРИТИЧНО] Обнаружены deadlock'и в 1С"
+            elif risk['level'] == 'high':
                 priority = "High"
+                summary = f"[СРОЧНО] Высокий риск дедлоков в 1С"
             else:
                 priority = "Medium"
+                summary = f"[ВНИМАНИЕ] Рост блокировок в 1С"
+            
+            # Формируем описание
+            description = f"*Автоматически создано системой мониторинга 1CML*\n\n"
+            description += f"**Проблема:** {risk['warnings'][0]['message'] if risk['warnings'] else 'Обнаружен рост блокировок'}\n\n"
+            
+            if risk['metrics'].get('last_hour'):
+                m = risk['metrics']['last_hour']
+                description += "**Метрики за последний час:**\n"
+                description += f"• Дедлоки: {m['deadlocks']}\n"
+                description += f"• Среднее время ожидания: {m['avg_wait_ms']:.0f} мс\n"
+                description += f"• Макс. время ожидания: {m['max_wait_ms']:.0f} мс\n\n"
+            
+            if risk['tables']:
+                description += "**Подозрительные таблицы:**\n"
+                for t in risk['tables'][:5]:
+                    if t['deadlocks'] > 0 or t['avg_wait_ms'] > 500:
+                        description += f"• {t['table']}: {t['lock_count']} блокировок, {t['avg_wait_ms']:.0f} мс\n"
+                description += "\n"
+            
+            description += "**Рекомендации:**\n"
+            description += "1. Проверить индексы для указанных таблиц\n"
+            description += "2. Проанализировать длительные транзакции\n"
+            description += "3. Оптимизировать запросы к конфликтующим таблицам\n"
             
             # Создаем задачу
             issue_key = jira.create_issue(
@@ -278,70 +344,115 @@ class DeadlockDetector:
             )
             
             if issue_key:
-                logger.info(f"✅ Создана задача в Jira: {issue_key}")
+                logger.info(f"Создана задача в Jira: {issue_key}")
                 return issue_key
-            else:
-                logger.error("❌ Ошибка создания задачи в Jira")
-                return None
-                
+            
         except Exception as e:
             logger.error(f"Ошибка создания задачи в Jira: {e}")
-            return None
+        
+        return None
+    
+    def save_to_postgresql(self, risk):
+        """Сохранение результата в PostgreSQL"""
+        try:
+            import psycopg2
+            
+            conn = psycopg2.connect(
+                host=os.getenv('DB_HOST', 'localhost'),
+                port=os.getenv('DB_PORT', '5432'),
+                database=os.getenv('DB_NAME', 'monitoring'),
+                user=os.getenv('DB_USER', 'postgres'),
+                password=os.getenv('DB_PASSWORD', 'password')
+            )
+            
+            cur = conn.cursor()
+            
+            # Создаем таблицу, если нет
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS deadlock_checks (
+                    id SERIAL PRIMARY KEY,
+                    check_time TIMESTAMP,
+                    risk_level VARCHAR(20),
+                    risk_score INTEGER,
+                    deadlocks_last_hour INTEGER,
+                    avg_wait_ms FLOAT,
+                    max_wait_ms FLOAT,
+                    trend_pct FLOAT,
+                    top_tables TEXT,
+                    warnings TEXT
+                )
+            """)
+            
+            # Вставляем данные
+            m = risk['metrics'].get('last_hour', {})
+            trend = risk['metrics'].get('trend', {})
+            
+            cur.execute("""
+                INSERT INTO deadlock_checks 
+                (check_time, risk_level, risk_score, deadlocks_last_hour, 
+                 avg_wait_ms, max_wait_ms, trend_pct, top_tables, warnings)
+                VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                risk['level'],
+                risk['score'],
+                m.get('deadlocks', 0),
+                m.get('avg_wait_ms', 0),
+                m.get('max_wait_ms', 0),
+                trend.get('trend_pct', 0),
+                json.dumps(risk['tables']),
+                json.dumps(risk['warnings'])
+            ))
+            
+            conn.commit()
+            cur.close()
+            conn.close()
+            
+            logger.info("Результат сохранен в PostgreSQL")
+            
+        except Exception as e:
+            logger.error(f"Ошибка сохранения в PostgreSQL: {e}")
     
     def run(self):
         """Основной метод запуска"""
         logger.info("=" * 60)
         logger.info("ЗАПУСК АНАЛИЗА БЛОКИРОВОК")
         
-        # Получаем статистику за 7 дней
-        df = self.get_lock_stats(days=7)
+        # Анализируем риск
+        risk = self.analyze_risk()
         
-        if df.empty:
-            logger.warning("Нет данных для анализа")
-            return
+        # Логируем результаты
+        logger.info(f"Уровень риска: {risk['level'].upper()} (оценка: {risk['score']})")
         
-        # Получаем топ таблиц за сегодня
-        top_tables = self.get_top_tables()
+        if risk['warnings']:
+            logger.info("Предупреждения:")
+            for w in risk['warnings']:
+                logger.info(f"  {w['level']}: {w['message']}")
         
-        # Рассчитываем тренд
-        trend = self.calculate_trend(df)
+        if risk['metrics'].get('last_hour'):
+            m = risk['metrics']['last_hour']
+            logger.info(f"За последний час: блокировок {m['total_locks']}, "
+                       f"дедлоков {m['deadlocks']}, "
+                       f"среднее ожидание {m['avg_wait_ms']:.0f} мс")
         
-        # Выводим результаты
-        logger.info(f"Результаты анализа:")
-        logger.info(f"  Тренд: {trend['trend_percent']}%")
-        logger.info(f"  Уровень риска: {trend['risk_level']}")
-        logger.info(f"  {trend['message']}")
+        # Сохраняем результат
+        self.save_to_postgresql(risk)
         
-        if not top_tables.empty:
-            logger.info(f"Топ таблиц по блокировкам сегодня:")
-            for _, row in top_tables.iterrows():
-                logger.info(f"  {row['table_name']}: {row['lock_count']} блокировок")
-        
-        # Отправляем алерт в Telegram при любом уровне кроме normal
-        if trend['risk_level'] != 'normal':
-            self.send_telegram_alert(trend['message'], trend['risk_level'])
-        
-        # Создаем задачу в Jira при critical или high
-        if trend['risk_level'] in ['critical', 'high']:
-            self.create_jira_ticket(trend, top_tables)
-        
-        # Если есть deadlock'и - всегда critical
-        if trend['deadlocks_today'] > 0:
-            self.send_telegram_alert(
-                f"🚨 Обнаружены deadlock'и! Количество: {trend['deadlocks_today']}",
-                'critical'
-            )
-            self.create_jira_ticket(trend, top_tables)
+        # Отправляем алерты в зависимости от уровня риска
+        if risk['level'] in ['critical', 'high']:
+            self.send_telegram_alert(risk)
+            self.create_jira_ticket(risk)
+        elif risk['level'] == 'warning' and risk['score'] > 30:
+            self.send_telegram_alert(risk)
         
         logger.info("АНАЛИЗ ЗАВЕРШЕН")
         logger.info("=" * 60)
-
+        
+        return risk
 
 def main():
     """Точка входа"""
     detector = DeadlockDetector()
     detector.run()
-
 
 if __name__ == "__main__":
     main()
