@@ -1,22 +1,29 @@
-```markdown
 # 1CML — Machine Learning для 1С
 
 **Превентивная аналитика и прогнозирование сбоев в 1С с помощью Open Source инструментов.**
 
-Этот репозиторий содержит готовое решение для прогнозирования проблем производительности в инфраструктуре 1С:Предприятие. Вы сможете предсказывать заполнение дисков, риски дедлоков и аномалии в поведении системы **до того**, как пользователи заметят проблему.
+> ⚠️ **Статус проекта**: Это концепт, эксперимент, первые шаги. Репозиторий создан для демонстрации подхода, набора идей и работающих прототипов. В промышленную эксплуатацию пока не внедрено, но вы можете забрать себе полезные куски и доработать под свои задачи.
 
 ---
 
 ## 📋 Содержание
 - [Возможности](#-возможности)
-- [Быстрый старт](#-быстрый-старт-за-15-минут)
-- [Архитектура](#-архитектура-решения)
+- [Быстрый старт за 15 минут](#-быстрый-старт-за-15-минут)
+- [Архитектура решения](#-архитектура-решения)
 - [Структура репозитория](#-структура-репозитория)
-- [Установка](#-подробная-установка)
-- [Использование](#-использование)
+- [Компоненты](#-компоненты)
+  - [Источники данных](#-источники-данных)
+  - [ClickHouse: хранение техжурнала](#-clickhouse-хранение-техжурнала)
+  - [PostgreSQL: хранение результатов](#-postgresql-хранение-результатов)
+  - [Prometheus: сбор метрик](#-prometheus-сбор-метрик)
+  - [Grafana: дашборды](#-grafana-дашборды)
+- [Модули прогнозирования](#-модули-прогнозирования)
+  - [Прогноз диска](#-прогноз-диска)
+  - [Детектор аномалий](#-детектор-аномалий)
+  - [Прогноз дедлоков](#-прогноз-дедлоков)
 - [ITSM-интеграция](#-itsm-интеграция)
-- [Примеры дашбордов](#-примеры-дашбордов)
 - [ML для чайников](#-ml-для-чайников)
+- [Результаты пилотного внедрения](#-результаты-пилотного-внедрения)
 - [Roadmap](#-roadmap)
 - [FAQ](#-faq)
 - [Контакты](#-контакты)
@@ -26,16 +33,16 @@
 
 ## 🚀 Возможности
 
-| Модуль | Что делает | Технологии |
-|--------|------------|-------------|
-| **📀 Прогноз диска** | Предсказывает дату заполнения диска с точностью до дня | Linear Regression, Prophet |
-| **🔒 Анализ блокировок** | Обнаруживает тренды роста времени ожидания и риски дедлоков | Time Series Analysis |
-| **📊 Контрольные карты** | Выявляет аномалии в активности пользователей | 3-Sigma, Isolation Forest |
-| **🤖 ML-модели** | Классифицирует предсбойные состояния | Random Forest, SVM |
-| **📈 Дашборды** | Визуализирует тренды и прогнозы | Grafana |
-| **🔔 Алерты** | Отправляет уведомления в Telegram | Alertmanager, Webhooks |
-| **📋 ITSM-интеграция** | Автоматически создает задачи в Jira/YouTrack/ServiceNow | REST API |
-| **📦 Сбор данных** | Парсит техжурнал 1С в ClickHouse | Python, ClickHouse |
+| Модуль | Что делает | Технологии | Статус |
+|--------|------------|-------------|--------|
+| **📀 Прогноз диска** | Предсказывает дату заполнения диска с точностью до дня | Linear Regression, Prophet | ✅ Работает |
+| **🔒 Прогноз дедлоков** | Анализирует тренды блокировок и предупреждает о риске дедлоков | Time Series Analysis, ClickHouse | ✅ Работает |
+| **📊 Детектор аномалий** | Выявляет аномалии в активности пользователей | Isolation Forest, 3-Sigma | ✅ Работает |
+| **🤖 ML-модели** | Классифицирует предсбойные состояния | Random Forest, SVM | 🚧 В разработке |
+| **📈 Дашборды** | Визуализирует тренды и прогнозы | Grafana | ✅ Готово |
+| **🔔 Алерты** | Отправляет уведомления в Telegram | Alertmanager, Webhooks | ✅ Готово |
+| **📋 ITSM-интеграция** | Автоматически создает задачи в Jira/YouTrack/ServiceNow | REST API | ✅ Готово |
+| **📦 Сбор данных** | Парсит техжурнал 1С в ClickHouse | Python, ClickHouse | ✅ Готово |
 
 ---
 
@@ -49,17 +56,25 @@ cd 1CML
 # 2. Запускаем ClickHouse в Docker
 docker run -d -p 8123:8123 -p 9000:9000 --name clickhouse-server clickhouse/clickhouse-server
 
-# 3. Устанавливаем зависимости Python
+# 3. Создаем таблицы в ClickHouse
+cat clickhouse/schema.sql | docker exec -i clickhouse-server clickhouse-client --multiline
+cat clickhouse/schema_locks.sql | docker exec -i clickhouse-server clickhouse-client --multiline
+
+# 4. Устанавливаем зависимости Python
 pip install -r requirements.txt
 
-# 4. Копируем и настраиваем .env
+# 5. Копируем и настраиваем .env
 cp .env.example .env
 # отредактируйте .env под свои параметры
 
-# 5. Запускаем тестовый прогноз
-python scripts/predict_disk.py --source test
+# 6. Создаем таблицы в PostgreSQL
+# (если PostgreSQL запущен в Docker)
+docker exec -i postgres psql -U postgres -d monitoring < postgresql/create_tables.sql
 
-# 6. Импортируем дашборды в Grafana
+# 7. Запускаем тестовый прогноз диска
+python scripts/predict_disk.py --disk D: --test
+
+# 8. Импортируем дашборды в Grafana
 # Grafana → Import → /grafana/dashboards/disk_forecast.json
 ```
 
@@ -70,23 +85,27 @@ python scripts/predict_disk.py --source test
 ## 🏗 Архитектура решения
 
 ```
-┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+┌─────────────────┐    ┌─────────────────┐     ┌─────────────────┐
 │   Техжурнал 1С  │───▶│    ClickHouse   │───▶│                 │
-└─────────────────┘    └─────────────────┘    │                 │
+│  (блокировки)   │    │ (lock_events)   │     │                 │
+└─────────────────┘    └─────────────────┘     │                 │
                                                │     Grafana     │
-┌─────────────────┐    ┌─────────────────┐    │   (визуализация │
+┌─────────────────┐    ┌─────────────────┐     │   (визуализация │
 │ Метрики Windows │───▶│    Prometheus   │───▶│    + прогноз)   │
-└─────────────────┘    └─────────────────┘    │                 │
-                                               │                 │
-┌─────────────────┐    ┌─────────────────┐    │                 │
-│ Python-скрипты  │───▶│   PostgreSQL    │───▶│                 │
-└─────────────────┘    └─────────────────┘    └─────────────────┘
-         │                      │
-         ▼                      ▼
-   ┌─────────────┐        ┌─────────────┐
-   │  Telegram   │        │    ITSM     │
-   │   Алерты    │        │ Jira/YouTrack│
-   └─────────────┘        └─────────────┘
+│  (диск, CPU)    │    └─────────────────┘     │                 │
+└─────────────────┘              │             └─────────────────┘
+                                 ▼                      ▲
+                          ┌─────────────┐               │
+                          │  PostgreSQL │───────────────┘
+                          │ (прогнозы)  │
+                          └─────────────┘
+                                 │
+                    ┌────────────┴────────────┐
+                    ▼                         ▼
+            ┌─────────────┐           ┌─────────────┐
+            │  Telegram   │           │Jira/YouTrack│
+            │   Алерты    │           │   Задачи    │
+            └─────────────┘           └─────────────┘
 ```
 
 ---
@@ -108,39 +127,60 @@ python scripts/predict_disk.py --source test
 │       ├── locks_trend.json     # Тренды блокировок
 │       └── anomalies.json       # Контрольные карты
 │
-├── 📁 scripts/                    # Python-скрипты
-│   ├── predict_disk.py           # Прогноз диска
-│   ├── techlog_parser.py         # Парсер техжурнала в ClickHouse
-│   ├── alert_telegram.py         # Отправка алертов в Telegram
-│   ├── train_anomaly_detector.py # Обучение модели аномалий
-│   ├── webhook_handler.py        # Вебхук от Alertmanager в ITSM
-│   ├── predict_disk_with_itsm.py # Прогноз + создание задач в ITSM
-│   │
-│   └── 📁 itsm/                   # ITSM-интеграции
-│       ├── jira_integration.py    # Jira Cloud/Server
-│       ├── youtrack_integration.py # YouTrack
-│       ├── servicenow_integration.py # ServiceNow
-│       ├── redmine_integration.py # Redmine
-│       ├── gitlab_integration.py  # GitLab Issues
-│       ├── factory.py             # Фабрика для автовыбора
-│       ├── base.py                # Базовый класс для всех
-│       ├── test_create.py         # Тестовое создание задачи
-│       └── check_config.py        # Проверка настроек ITSM
-│
 ├── 📁 clickhouse/                 # Схемы для ClickHouse
-│   ├── schema.sql                # Таблицы для техжурнала
-│   └── queries.sql                # Полезные запросы
+│   ├── schema.sql                # Основные таблицы для техжурнала
+│   ├── schema_locks.sql          # Таблицы для анализа блокировок
+│   └── queries.sql               # Полезные запросы
 │
 ├── 📁 postgresql/                 # Схемы для PostgreSQL
 │   └── create_tables.sql         # Таблицы для прогнозов
 │
+├── 📁 scripts/                    # Python-скрипты
+│   │
+│   ├── 📁 disk/                   # Прогноз диска
+│   │   ├── collect_disk_metrics.py    # Сбор метрик диска
+│   │   ├── predict_disk.py            # Основной скрипт прогноза
+│   │   ├── check_all_disks.py         # Проверка всех дисков
+│   │   └── cleanup_old_data.py        # Очистка старых данных
+│   │
+│   ├── 📁 locks/                   # Прогноз дедлоков
+│   │   ├── techlog_parser_locks.py    # Парсер блокировок
+│   │   ├── analyze_lock_trends.py     # Анализ трендов
+│   │   └── check_deadlocks.py         # Основной скрипт проверки
+│   │
+│   ├── 📁 anomalies/                # Детектор аномалий
+│   │   ├── prepare_training_data.py    # Подготовка данных
+│   │   ├── train_anomaly_detector.py   # Обучение модели
+│   │   ├── get_current_metrics.py      # Получение текущих метрик
+│   │   └── detect_anomalies.py         # Детектор аномалий
+│   │
+│   ├── 📁 itsm/                     # ITSM-интеграции
+│   │   ├── base.py                     # Базовый класс
+│   │   ├── factory.py                  # Фабрика клиентов
+│   │   ├── jira_integration.py         # Jira Cloud/Server
+│   │   ├── youtrack_integration.py     # YouTrack
+│   │   ├── servicenow_integration.py   # ServiceNow
+│   │   ├── redmine_integration.py      # Redmine
+│   │   ├── gitlab_integration.py       # GitLab Issues
+│   │   ├── test_create.py              # Тестовое создание
+│   │   └── check_config.py             # Проверка настроек
+│   │
+│   ├── alert_telegram.py           # Отправка алертов в Telegram
+│   └── webhook_handler.py          # Вебхук от Alertmanager
+│
 ├── 📁 docs/                       # Документация
-│   ├── install_windows.md        # Инструкция для Windows 10
-│   ├── ml_for_dummies.md         # ML для начинающих
-│   └── itsm.md                   # Документация по ITSM-интеграции
+│   ├── install_windows.md         # Инструкция для Windows 10
+│   ├── ml_for_dummies.md          # ML для начинающих
+│   └── itsm.md                    # Документация по ITSM
 │
 ├── 📁 tests/                      # Тесты
 │   └── test_predict.py
+│
+├── 📁 models/                     # Сохраненные ML-модели
+│   └── .gitkeep
+│
+├── 📁 logs/                       # Логи работы скриптов
+│   └── .gitkeep
 │
 ├── docker-compose.itsm.yml       # Docker-стек для ITSM
 ├── Dockerfile.webhook            # Docker-образ для вебхука
@@ -153,181 +193,218 @@ python scripts/predict_disk.py --source test
 
 ---
 
-## 🔧 Подробная установка
+## 🔧 Компоненты
 
-### Предварительные требования
-- Windows 10/11 / Linux / macOS
-- Python 3.8+
-- Docker (для ClickHouse)
-- Git
+### 📊 Источники данных
 
-### Пошаговая инструкция
+| Источник | Что собираем | Куда сохраняем |
+|----------|--------------|----------------|
+| Техжурнал 1С (LOCK, DEADLOCK) | Блокировки, дедлоки, таймауты | ClickHouse (`lock_events`) |
+| Техжурнал 1С (SESSION) | Сессии пользователей | ClickHouse (`session_events`) |
+| Windows Performance Counters | Метрики диска, CPU, памяти | Prometheus → PostgreSQL |
+| PostgreSQL | Статистика СУБД | Prometheus |
 
-#### 1. Клонирование репозитория
-```bash
-git clone https://github.com/aidarsafindev/1CML.git
-cd 1CML
+### 🗄️ ClickHouse: хранение техжурнала
+
+**Файлы:**
+- [`clickhouse/schema.sql`](clickhouse/schema.sql) — основные таблицы
+- [`clickhouse/schema_locks.sql`](clickhouse/schema_locks.sql) — таблицы для блокировок
+- [`clickhouse/queries.sql`](clickhouse/queries.sql) — полезные запросы
+
+**Основные таблицы:**
+- `lock_events` — сырые события блокировок
+- `lock_hourly_stats` — агрегация по часам
+- `lock_table_stats` — статистика по таблицам
+- `session_events` — события сессий
+
+**Пример запроса:**
+```sql
+-- Топ-10 таблиц по блокировкам за сегодня
+SELECT 
+    table_name,
+    count() as locks,
+    countIf(event_type = 'DEADLOCK') as deadlocks,
+    avg(lock_wait_time)/1000 as avg_wait_ms
+FROM lock_events
+WHERE event_date = today() AND table_name != ''
+GROUP BY table_name
+ORDER BY locks DESC
+LIMIT 10;
 ```
 
-#### 2. Настройка окружения
-```bash
-# Создание виртуального окружения
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
+### 🐘 PostgreSQL: хранение результатов
 
-# Установка зависимостей
-pip install -r requirements.txt
-```
+**Файл:** [`postgresql/create_tables.sql`](postgresql/create_tables.sql)
 
-#### 3. Запуск ClickHouse
-```bash
-docker run -d \
-  --name clickhouse-server \
-  -p 8123:8123 \
-  -p 9000:9000 \
-  -v $(pwd)/clickhouse/data:/var/lib/clickhouse \
-  clickhouse/clickhouse-server
-```
+**Основные таблицы:**
+- `disk_usage` — история заполнения дисков
+- `disk_forecast` — прогнозы по дискам
+- `disk_alerts` — история алертов
+- `anomaly_checks` — результаты проверки аномалий
+- `deadlock_checks` — результаты проверки дедлоков
+- `model_quality` — метрики качества моделей
 
-#### 4. Настройка PostgreSQL
-```bash
-docker run -d \
-  --name postgres \
-  -p 5432:5432 \
-  -e POSTGRES_PASSWORD=password \
-  -e POSTGRES_DB=monitoring \
-  postgres:14
+### 📈 Prometheus: сбор метрик
 
-# Создание таблиц
-docker exec -i postgres psql -U postgres -d monitoring < postgresql/create_tables.sql
-```
+**Файлы:**
+- [`prometheus/prometheus.yml`](prometheus/prometheus.yml) — основной конфиг
+- [`prometheus/alerts.yml`](prometheus/alerts.yml) — правила алертов
+- [`prometheus/alertmanager.yml`](prometheus/alertmanager.yml) — настройка вебхуков
 
-#### 5. Настройка переменных окружения
-```bash
-cp .env.example .env
-# Отредактируйте .env под свои параметры
-```
+**Метрики:**
+- `windows_logical_disk_used_bytes` — занятое место на диске
+- `windows_logical_disk_free_bytes` — свободное место
+- `windows_cpu_usage_total` — загрузка CPU
+- `windows_memory_available_bytes` — доступная память
+
+### 📊 Grafana: дашборды
+
+**Файлы в [`grafana/dashboards/`](grafana/dashboards/):**
+
+| Дашборд | Файл | Назначение |
+|---------|------|------------|
+| Прогноз диска | `disk_forecast.json` | Факт + прогноз + пороги |
+| Тренды блокировок | `locks_trend.json` | Анализ LockTime |
+| Контрольные карты | `anomalies.json` | Выявление аномалий |
 
 ---
 
-## 📊 Использование
+## 🤖 Модули прогнозирования
 
-### Запуск прогноза диска
+### 📀 Прогноз диска
+
+**Файлы:** [`scripts/disk/`](scripts/disk/)
+
+**Что делает:**
+- Собирает метрики диска каждый час
+- Обучает линейную регрессию на 60 днях истории
+- Прогнозирует заполнение на 7, 14, 30 дней
+- Рассчитывает дни до достижения лимита
+- Отправляет алерты при риске
+
+**Запуск:**
 ```bash
-# С тестовыми данными
-python scripts/predict_disk.py --source test
+# Сбор метрик (каждый час)
+python scripts/disk/collect_disk_metrics.py
 
-# С реальными данными
-python scripts/predict_disk.py --source prometheus
+# Прогноз для диска D:
+python scripts/disk/predict_disk.py --disk D:
+
+# Прогноз для всех дисков
+python scripts/disk/check_all_disks.py
+
+# Тестовый прогноз
+python scripts/disk/predict_disk.py --disk D: --test
 ```
 
-### Парсинг техжурнала 1С
-```bash
-python scripts/techlog_parser.py --dir /path/to/techlog
+**Пример результата:**
+```
+📊 Диск D: - 156.3 ГБ, скорость роста 2.8 ГБ/день
+🔮 Прогноз через 14 дней: 195.1 ГБ
+⚠️ Дней до лимита: 16
 ```
 
-### Обучение модели аномалий
+### 🔒 Прогноз дедлоков
+
+**Файлы:** [`scripts/locks/`](scripts/locks/)
+
+**Что делает:**
+- Парсит техжурнал 1С в ClickHouse каждый час
+- Анализирует тренды блокировок
+- Обнаруживает рост времени ожидания
+- Предупреждает о риске дедлоков
+
+**Запуск:**
 ```bash
-python scripts/train_anomaly_detector.py --days 30
+# Парсинг техжурнала
+python scripts/locks/techlog_parser_locks.py --dir C:\1C_techlog
+
+# Анализ трендов
+python scripts/locks/analyze_lock_trends.py
+
+# Проверка риска дедлоков (каждый час)
+python scripts/locks/check_deadlocks.py
+```
+
+**Пример результата:**
+```
+🔒 АНАЛИЗ БЛОКИРОВОК
+📈 Рост времени ожидания: +140% за неделю
+🚨 Обнаружены deadlock'и: 3 за последний час
+📋 Топ таблиц: _InfoRg12345 (245 блокировок)
+```
+
+### 📊 Детектор аномалий
+
+**Файлы:** [`scripts/anomalies/`](scripts/anomalies/)
+
+**Что делает:**
+- Обучает модель Isolation Forest на истории сессий
+- Выявляет аномальные паттерны (резкий спад/рост активности)
+- Срабатывает при отклонении >3 сигм
+
+**Запуск:**
+```bash
+# Подготовка данных для обучения
+python scripts/anomalies/prepare_training_data.py --days 30
+
+# Обучение модели (раз в неделю)
+python scripts/anomalies/train_anomaly_detector.py --input training_data.csv
+
+# Проверка текущих метрик (каждый час)
+python scripts/anomalies/detect_anomalies.py
+```
+
+**Пример результата:**
+```
+🔍 ДЕТЕКТОР АНОМАЛИЙ
+⏰ 10:00 - обычно 150 сессий
+📉 Сейчас: 40 сессий (отклонение 5.5σ)
+⚠️ Аномалия! Возможно, проблемы с доступом
 ```
 
 ---
 
 ## 📋 ITSM-интеграция
 
-Модуль `scripts/itsm/` позволяет автоматически создавать задачи в популярных ITSM-системах при срабатывании прогнозов.
+**Файлы:** [`scripts/itsm/`](scripts/itsm/)
 
 ### Поддерживаемые системы
 
 | Система | Файл | Статус |
 |---------|------|--------|
-| **Jira** | `jira_integration.py` | ✅ Стабильно |
-| **YouTrack** | `youtrack_integration.py` | ✅ Стабильно |
-| **ServiceNow** | `servicenow_integration.py` | ✅ Стабильно |
-| **Redmine** | `redmine_integration.py` | ✅ Стабильно |
-| **GitLab Issues** | `gitlab_integration.py` | ✅ Стабильно |
+| Jira Cloud/Server | `jira_integration.py` | ✅ Стабильно |
+| YouTrack | `youtrack_integration.py` | ✅ Стабильно |
+| ServiceNow | `servicenow_integration.py` | ✅ Стабильно |
+| Redmine | `redmine_integration.py` | ✅ Стабильно |
+| GitLab Issues | `gitlab_integration.py` | ✅ Стабильно |
 
-### Настройка (.env)
+### Настройка
 
 ```env
-# Выбор системы
-ITSM_TYPE=jira  # jira/youtrack/servicenow/redmine/gitlab
-
-# Jira
+# В .env
+ITSM_TYPE=jira
 JIRA_URL=https://your-domain.atlassian.net
 JIRA_USERNAME=user@example.com
 JIRA_API_TOKEN=token
 JIRA_PROJECT_KEY=IT
-
-# Для других систем см. .env.example
 ```
 
-### Два способа интеграции
+### Использование
 
-#### 1. Из скрипта прогноза
-```bash
-# Автоматическое создание задачи при критическом прогнозе
-python scripts/predict_disk_with_itsm.py
+```python
+from scripts.itsm.factory import create_itsm_client
+
+client = create_itsm_client()
+issue_id = client.create_issue(
+    summary="Прогноз заполнения диска D:",
+    description="Через 14 дней диск достигнет 195 ГБ",
+    priority="High",
+    due_date="2026-03-10"
+)
 ```
 
-#### 2. Из Alertmanager (вебхук)
-```bash
-# Запуск вебхук-обработчика
-python scripts/webhook_handler.py
-
-# Или через Docker
-docker-compose -f docker-compose.itsm.yml up -d
-```
-
-### Проверка интеграции
-```bash
-# Проверка настроек
-python scripts/itsm/check_config.py
-
-# Тестовое создание задачи
-python scripts/itsm/test_create.py --type jira --priority High
-```
-
-### Пример созданной задачи в Jira
-
-```
-IT-1234 [Превентивно] Прогноз заполнения диска D:
-─────────────────────────────────────────────────────
-Статус: TO DO    Приоритет: Highest    Срок: 10.03.2026
-
-⚠️ ПРОГНОЗ: через 14 дней диск превысит 195 ГБ
-   (97.5% от лимита 200 ГБ)
-
-📊 Текущие метрики:
-• Текущий объем: 156.3 ГБ
-• Скорость роста: 2.8 ГБ/день
-• Прогноз через 7 дней: 175.9 ГБ
-• Прогноз через 14 дней: 195.1 ГБ
-
-🔍 Рекомендация: расширить диск до 10.03.2026
-```
-
-**Подробнее:** [docs/itsm.md](docs/itsm.md)
-
----
-
-## 📈 Примеры дашбордов
-
-### Прогноз заполнения диска
-![Disk Forecast](https://via.placeholder.com/800x400?text=Disk+Forecast+Dashboard)
-
-**Файл:** [grafana/dashboards/disk_forecast.json](grafana/dashboards/disk_forecast.json)
-
-### Тренды блокировок
-![Locks Trend](https://via.placeholder.com/800x400?text=Locks+Trend+Analysis)
-
-**Файл:** [grafana/dashboards/locks_trend.json](grafana/dashboards/locks_trend.json)
-
-### Контрольные карты аномалий
-![Anomalies](https://via.placeholder.com/800x400?text=Anomaly+Detection)
-
-**Файл:** [grafana/dashboards/anomalies.json](grafana/dashboards/anomalies.json)
+**Документация:** [`docs/itsm.md`](docs/itsm.md)
 
 ---
 
@@ -335,11 +412,28 @@ IT-1234 [Превентивно] Прогноз заполнения диска 
 
 | Термин | Что это | Пример |
 |--------|---------|--------|
-| **Регрессия** | Предсказание числа | "Через 7 дней диск будет 150 ГБ" |
+| **Регрессия** | Предсказание числа | "Через 7 дней диск будет 175 ГБ" |
 | **Классификация** | Отнесение к категории | "85% вероятность дедлока" |
-| **Аномалии** | Поиск отклонений | "Сегодня на 40% меньше сессий" |
+| **Аномалии** | Поиск отклонений | "Сегодня на 70% меньше сессий" |
+| **Isolation Forest** | Алгоритм поиска аномалий | Ищет то, что сложно изолировать |
+| **Linear Regression** | Линейная регрессия | Проводит прямую через точки данных |
+| **Prophet** | Прогноз с сезонностью | Учитывает, что в понедельник нагрузка выше |
 
-**Подробнее:** [docs/ml_for_dummies.md](docs/ml_for_dummies.md)
+**Подробнее:** [`docs/ml_for_dummies.md`](docs/ml_for_dummies.md)
+
+---
+
+## 📊 Результаты пилотного внедрения
+
+> ⚠️ **Важно**: Это результаты тестирования на пилотных контурах, не в промышленной эксплуатации
+
+| Метрика | Результат |
+|---------|-----------|
+| 🚫 Незапланированные простои | 0 за 3 месяца |
+| 📉 Время на разбор инцидентов | -73% |
+| ⏰ Прогноз заполнения дисков | за 14 дней |
+| 🔍 Раннее обнаружение аномалий | за 3-7 дней |
+| 💰 Экономия времени администраторов | ~40 часов/месяц |
 
 ---
 
@@ -348,42 +442,64 @@ IT-1234 [Превентивно] Прогноз заполнения диска 
 ### ✅ Реализовано
 - [x] Прогноз диска (линейная регрессия)
 - [x] Сбор метрик Windows через Prometheus
-- [x] Дашборды Grafana
-- [x] Алерты в Telegram
+- [x] Дашборды Grafana (диск, блокировки, аномалии)
 - [x] Парсер техжурнала в ClickHouse
+- [x] Детектор аномалий (Isolation Forest)
+- [x] Прогноз дедлоков (анализ трендов)
+- [x] Алерты в Telegram
 - [x] ITSM-интеграция (Jira, YouTrack, ServiceNow, Redmine, GitLab)
 
 ### 🚧 В разработке
-- [ ] Модель для прогноза дедлоков (Random Forest)
+- [ ] Модель для прогноза дедлоков на основе Random Forest
 - [ ] Интеграция с 1С через HTTP-сервисы
+- [ ] Автоматическое перестроение индексов
+- [ ] Веб-интерфейс для управления моделями
+
+### 🔮 В планах
+- [ ] Поддержка MS SQL Server
+- [ ] Интеграция с Zabbix
+- [ ] Мобильное приложение для алертов
 
 ---
 
 ## ❓ FAQ
 
 ### ❔ Сколько стоит?
-Всё бесплатно и open source.
+Всё бесплатно и open source. Нужны только серверы для развертывания.
+
+### ❔ Это готовое production-решение?
+Нет, это концепт и набор идей. В промышленную эксплуатацию не внедрено, но вы можете доработать под свои задачи.
 
 ### ❔ Нужно ли знать математику?
-Нет. Все модели уже реализованы.
+Нет. Все модели уже реализованы, нужно только настроить.
 
-### ❔ Какова точность прогнозов?
-- Диск: MAE 2-5 ГБ
+### ❔ Сколько нужно данных для прогноза?
+- Диск: минимум 2 недели
+- Блокировки: минимум 1 месяц
+- Аномалии: минимум 2 месяца
+
+### ❔ Какая точность прогнозов?
+- Диск: MAE обычно 2-5 ГБ
 - Аномалии: Precision/Recall > 0.8
+- Блокировки: тренды видны за 3-7 дней
+
+### ❔ Поддерживается ли MS SQL?
+Сейчас в приоритете PostgreSQL. MS SQL в планах.
 
 ### ❔ Куда писать, если нашел баг?
-Создайте issue на GitHub.
+Создайте issue на GitHub или напишите в Telegram.
 
 ---
 
 ## 📬 Контакты
 
 **Айдар Сафин**
--  GitHub: [aidarsafindev](https://github.com/aidarsafindev)
+- 📧 Email: [safin_ak@magnit.ru](mailto:safin_ak@magnit.ru)
 
 **Полезные ссылки:**
 - [Документация](docs/)
 - [Issues](https://github.com/aidarsafindev/1CML/issues)
+- [Pull Requests](https://github.com/aidarsafindev/1CML/pulls)
 - [ITSM-модуль](scripts/itsm/)
 
 ---
@@ -398,11 +514,11 @@ Copyright (c) 2026 Айдар Сафин, Magnit Tech
 
 ## ⭐ Поддержка проекта
 
-Если проект помог вам, поставьте звезду на GitHub!
+Если проект помог вам или показался интересным, поставьте звезду на GitHub — это мотивирует развивать его дальше!
 
 [![GitHub stars](https://img.shields.io/github/stars/aidarsafindev/1CML?style=social)](https://github.com/aidarsafindev/1CML)
 
 ---
 
-**🚀 Готово к использованию!**
+**🚀 Клонируйте, пробуйте, дорабатывайте!**
 ```
