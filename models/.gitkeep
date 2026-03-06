@@ -23,3 +23,86 @@
 python scripts/anomalies/train_anomaly_detector.py --days 30
 
 # Модель сохранится в models/anomaly_model.pkl
+```
+
+### Прогноз диска
+
+```bash
+# Прогноз автоматически сохраняет модель при запуске
+python scripts/disk/predict_disk.py --disk D:
+
+# Модель сохраняется в models/disk_model_D.pkl
+```
+
+## 📊 Размер моделей
+
+| Модель | Примерный размер | Когда обновляется |
+|--------|------------------|-------------------|
+| `anomaly_model.pkl` | 5-10 МБ | Раз в неделю |
+| `disk_model_*.pkl` | 1-2 КБ | Каждый день |
+| `scaler.pkl` | 1-5 КБ | При обучении |
+
+## 🔧 Использование в коде
+
+### Загрузка модели детектора аномалий
+
+```python
+import joblib
+
+# Загрузка модели
+model_data = joblib.load('models/anomaly_model.pkl')
+model = model_data['model']
+scaler = model_data['scaler']
+feature_names = model_data['feature_names']
+thresholds = model_data['thresholds']
+
+print(f"Модель обучена: {model_data['train_date']}")
+```
+
+### Сохранение модели
+
+```python
+import joblib
+
+model_data = {
+    'model': model,
+    'scaler': scaler,
+    'feature_names': feature_names,
+    'thresholds': thresholds,
+    'train_date': datetime.now().isoformat()
+}
+
+joblib.dump(model_data, 'models/anomaly_model.pkl')
+```
+
+## ⚠️ Важно
+
+- Файлы `.pkl` могут быть большими (до 10 МБ для Isolation Forest)
+- Они не должны попадать в Git (добавлены в `.gitignore`)
+- Папка создается автоматически при первом запуске скриптов
+- При обновлении кода старые модели могут стать несовместимыми
+
+## 🗑️ Очистка
+
+Для удаления старых моделей:
+
+```bash
+# Удалить все модели
+rm -f models/*.pkl
+
+# Или выборочно
+rm -f models/anomaly_model.pkl
+```
+
+## 📁 .gitignore
+
+В корневом `.gitignore` уже добавлено:
+
+```
+# Models
+models/*.pkl
+models/*.joblib
+```
+
+Поэтому файлы моделей не попадут в репозиторий.
+```
